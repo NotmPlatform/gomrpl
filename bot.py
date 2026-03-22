@@ -1130,7 +1130,26 @@ async def open_partners(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     clear_all_forms(context)
     set_active_flow(context, "partner")
     await update.message.reply_text(
-        "Отправьте заявку на партнёрство или спецпроект.",
+        "Партнёрство с GoМарик
+
+"
+        "Здесь можно предложить:
+"
+        "— инфопартнёрство
+"
+        "— совместный проект
+"
+        "— спецпроект
+"
+        "— спонсорство
+"
+        "— другой формат сотрудничества
+
+"
+        "Сейчас я задам несколько коротких вопросов.
+
+"
+        "Как вас зовут или как называется ваша компания?",
         reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True),
     )
     return PARTNER_NAME
