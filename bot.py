@@ -475,7 +475,7 @@ def build_event_post_text(row: sqlite3.Row) -> str:
             time_text = ""
     else:
         time_text = ""
-    lines = [f"[{category}] {title}" if category else title]
+    lines = [f"{category} • {title}" if category else title]
     if dt_text:
         lines.append(f"📅 Дата: {dt_text}")
     if time_text:
@@ -793,6 +793,10 @@ def clear_all_forms(context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_active_flow(context)
 
 
+def suppress_next_private_fallback(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["suppress_next_fallback"] = True
+
+
 # =========================================================
 # Пользовательские сценарии
 # =========================================================
@@ -811,6 +815,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     clear_all_forms(context)
+    suppress_next_private_fallback(context)
     await update.message.reply_text("Действие отменено.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
@@ -841,6 +846,7 @@ async def event_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return QUICK_EVENT
     clear_all_forms(context)
+    suppress_next_private_fallback(context)
     await update.message.reply_text("Возвращаю в главное меню.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
@@ -977,6 +983,7 @@ async def ev_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             add_tag(request_id, f"Дубль:{duplicate_id}")
         await send_request_to_admin_group(context, request_id)
         clear_all_forms(context)
+        suppress_next_private_fallback(context)
         await update.message.reply_text(
             "Спасибо! Ваша заявка принята и отправлена на модерацию. Если потребуется, мы свяжемся с вами для уточнения деталей.",
             reply_markup=MAIN_MENU,
@@ -986,6 +993,7 @@ async def ev_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["event_form"] = {}
         await update.message.reply_text("Давайте заполним заново. Введите название события.", reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True))
         return EV_TITLE
+    suppress_next_private_fallback(context)
     await update.message.reply_text("Заявка отменена.", reply_markup=MAIN_MENU)
     clear_all_forms(context)
     return ConversationHandler.END
@@ -1015,6 +1023,7 @@ async def quick_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     )
     await send_request_to_admin_group(context, request_id)
     clear_all_forms(context)
+    suppress_next_private_fallback(context)
     await message.reply_text(
         "Спасибо! Заявка принята. Если потребуется, мы уточним детали.",
         reply_markup=MAIN_MENU,
@@ -1048,6 +1057,7 @@ async def ad_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = sanitize(update.message.text)
     if text == BTN_BACK:
         clear_all_forms(context)
+        suppress_next_private_fallback(context)
         await update.message.reply_text("Возвращаю в главное меню.", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     context.user_data["ad_form"] = {"ad_format": text}
@@ -1108,6 +1118,7 @@ async def ad_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     await send_request_to_admin_group(context, request_id)
     clear_all_forms(context)
+    suppress_next_private_fallback(context)
     await update.message.reply_text(
         "Спасибо! Рекламная заявка принята. Мы рассмотрим её и свяжемся с вами.",
         reply_markup=MAIN_MENU,
@@ -1179,6 +1190,7 @@ async def partner_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     await send_request_to_admin_group(context, request_id)
     clear_all_forms(context)
+    suppress_next_private_fallback(context)
     await update.message.reply_text(
         "Спасибо! Ваше предложение отправлено на рассмотрение.",
         reply_markup=MAIN_MENU,
@@ -1473,6 +1485,8 @@ async def handle_simple_moderation(query, context, row: sqlite3.Row, action: str
 # =========================================================
 async def private_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_private(update):
+        return
+    if context.user_data.pop("suppress_next_fallback", False):
         return
     if context.user_data.get("active_flow"):
         return
