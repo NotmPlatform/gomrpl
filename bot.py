@@ -703,7 +703,10 @@ async def schedule_publish_job(
     app: Application,
     request_id: str,
     run_at: datetime,
-) -> None:
+) -> bool:
+    if app.job_queue is None:
+        logger.warning("JobQueue недоступен: планирование заявки %s отключено", request_id)
+        return False
     existing = app.job_queue.get_jobs_by_name(f"publish:{request_id}")
     for job in existing:
         job.schedule_removal()
@@ -713,6 +716,7 @@ async def schedule_publish_job(
         data={"request_id": request_id},
         name=f"publish:{request_id}",
     )
+    return True
 
 
 async def publish_scheduled_request_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -731,6 +735,9 @@ async def publish_scheduled_request_job(context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def restore_scheduled_jobs(app: Application) -> None:
+    if app.job_queue is None:
+        logger.warning("JobQueue недоступен: отложенные публикации не будут восстановлены")
+        return
     for row in list_scheduled_requests():
         scheduled_at = sanitize(row["scheduled_at"])
         if not scheduled_at:
@@ -1224,7 +1231,22 @@ async def admin_group_reply_bridge(update: Update, context: ContextTypes.DEFAULT
             pending_admin_action=None,
             dialog_open=0,
         )
-        await schedule_publish_job(context.application, source_request["request_id"], run_at)
+        scheduled = await schedule_publish_job(context.application, source_request["request_id"], run_at)
+        if not scheduled:
+            update_request(
+                source_request["request_id"],
+                status="Новая",
+                scheduled_at=None,
+                pending_admin_action=None,
+                dialog_open=0,
+            )
+            await update.message.reply_text(
+                "Планирование недоступно: JobQueue не настроен. Установите пакет "
+                'python-telegram-bot[job-queue]' 
+                'и перезапустите бота, либо публикуйте вручную.',
+                reply_to_message_id=source_request["admin_group_message_id"],
+            )
+            return
         await update.message.reply_text(
             f"Заявка #{source_request['request_id']} поставлена в план на {run_at.astimezone(TZ).strftime('%d.%m.%Y %H:%M')}",
             reply_to_message_id=source_request["admin_group_message_id"],
@@ -1443,7 +1465,13 @@ async def private_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def on_startup(app: Application) -> None:
     init_db()
     await restore_scheduled_jobs(app)
-    app.job_queue.run_daily(daily_autoarchive_job, time=datetime.now(TZ).time(), name="daily_autoarchive")
+    if app.job_queue is not None:
+        app.job_queue.run_daily(daily_autoarchive_job, time=datetime.now(TZ).time(), name="daily_autoarchive")
+    else:
+        logger.warning(
+            "JobQueue не настроен. Бот запущен без автоархива и отложенных публикаций. "
+            'Установите зависимость: pip install "python-telegram-bot[job-queue]"'
+        )
     logger.info("Бот запущен")
 
 
