@@ -705,7 +705,7 @@ async def schedule_publish_job(
     run_at: datetime,
 ) -> bool:
     if app.job_queue is None:
-        logger.warning("JobQueue недоступен: планирование заявки %s отключено", request_id)
+        logger.warning("JobQueue не настроен. Планирование для заявки %s недоступно.", request_id)
         return False
     existing = app.job_queue.get_jobs_by_name(f"publish:{request_id}")
     for job in existing:
@@ -736,7 +736,7 @@ async def publish_scheduled_request_job(context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def restore_scheduled_jobs(app: Application) -> None:
     if app.job_queue is None:
-        logger.warning("JobQueue недоступен: отложенные публикации не будут восстановлены")
+        logger.warning("JobQueue не настроен. Восстановление отложенных публикаций пропущено.")
         return
     for row in list_scheduled_requests():
         scheduled_at = sanitize(row["scheduled_at"])
@@ -774,8 +774,23 @@ async def safe_copy_message(
     )
 
 
+def set_active_flow(context: ContextTypes.DEFAULT_TYPE, value: str) -> None:
+    context.user_data["active_flow"] = value
+
+
+def clear_active_flow(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("active_flow", None)
+
+
 def clear_event_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("event_form", None)
+
+
+def clear_all_forms(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("event_form", None)
+    context.user_data.pop("ad_form", None)
+    context.user_data.pop("partner_form", None)
+    clear_active_flow(context)
 
 
 # =========================================================
@@ -795,12 +810,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    clear_event_draft(context)
+    clear_all_forms(context)
     await update.message.reply_text("Действие отменено.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
 
 async def open_event_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    clear_all_forms(context)
+    set_active_flow(context, "event")
     await update.message.reply_text(
         "Как удобнее отправить событие?",
         reply_markup=EVENT_MODE_MENU,
@@ -811,16 +828,19 @@ async def open_event_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def event_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = sanitize(update.message.text)
     if text == BTN_FULL:
+        set_active_flow(context, "event")
         context.user_data["event_form"] = {}
         await update.message.reply_text("Введите название события.", reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True))
         return EV_TITLE
     if text == BTN_QUICK:
+        set_active_flow(context, "event")
         await update.message.reply_text(
             "Отправьте одним сообщением всё, что есть о событии: название, дату, место, стоимость, описание, контакт и фото. "
             "Если понадобится, мы уточним детали позже.",
             reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True),
         )
         return QUICK_EVENT
+    clear_all_forms(context)
     await update.message.reply_text("Возвращаю в главное меню.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
@@ -956,7 +976,7 @@ async def ev_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if duplicate_id and duplicate_id != request_id:
             add_tag(request_id, f"Дубль:{duplicate_id}")
         await send_request_to_admin_group(context, request_id)
-        clear_event_draft(context)
+        clear_all_forms(context)
         await update.message.reply_text(
             "Спасибо! Ваша заявка принята и отправлена на модерацию. Если потребуется, мы свяжемся с вами для уточнения деталей.",
             reply_markup=MAIN_MENU,
@@ -967,7 +987,7 @@ async def ev_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Давайте заполним заново. Введите название события.", reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True))
         return EV_TITLE
     await update.message.reply_text("Заявка отменена.", reply_markup=MAIN_MENU)
-    clear_event_draft(context)
+    clear_all_forms(context)
     return ConversationHandler.END
 
 
@@ -994,6 +1014,7 @@ async def quick_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         }
     )
     await send_request_to_admin_group(context, request_id)
+    clear_all_forms(context)
     await message.reply_text(
         "Спасибо! Заявка принята. Если потребуется, мы уточним детали.",
         reply_markup=MAIN_MENU,
@@ -1002,6 +1023,8 @@ async def quick_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def open_ad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    clear_all_forms(context)
+    set_active_flow(context, "ad")
     await update.message.reply_text(
         "Реклама в GoМарик\n\n"
         "Форматы:\n"
@@ -1024,6 +1047,7 @@ async def open_ad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ad_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = sanitize(update.message.text)
     if text == BTN_BACK:
+        clear_all_forms(context)
         await update.message.reply_text("Возвращаю в главное меню.", reply_markup=MAIN_MENU)
         return ConversationHandler.END
     context.user_data["ad_form"] = {"ad_format": text}
@@ -1083,7 +1107,7 @@ async def ad_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         }
     )
     await send_request_to_admin_group(context, request_id)
-    context.user_data.pop("ad_form", None)
+    clear_all_forms(context)
     await update.message.reply_text(
         "Спасибо! Рекламная заявка принята. Мы рассмотрим её и свяжемся с вами.",
         reply_markup=MAIN_MENU,
@@ -1092,6 +1116,8 @@ async def ad_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def open_partners(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    clear_all_forms(context)
+    set_active_flow(context, "partner")
     await update.message.reply_text(
         "Отправьте заявку на партнёрство или спецпроект.",
         reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True),
@@ -1152,7 +1178,7 @@ async def partner_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         }
     )
     await send_request_to_admin_group(context, request_id)
-    context.user_data.pop("partner_form", None)
+    clear_all_forms(context)
     await update.message.reply_text(
         "Спасибо! Ваше предложение отправлено на рассмотрение.",
         reply_markup=MAIN_MENU,
@@ -1232,23 +1258,12 @@ async def admin_group_reply_bridge(update: Update, context: ContextTypes.DEFAULT
             dialog_open=0,
         )
         scheduled = await schedule_publish_job(context.application, source_request["request_id"], run_at)
-        if not scheduled:
-            update_request(
-                source_request["request_id"],
-                status="Новая",
-                scheduled_at=None,
-                pending_admin_action=None,
-                dialog_open=0,
-            )
-            await update.message.reply_text(
-                "Планирование недоступно: JobQueue не настроен. Установите пакет "
-                'python-telegram-bot[job-queue]' 
-                'и перезапустите бота, либо публикуйте вручную.',
-                reply_to_message_id=source_request["admin_group_message_id"],
-            )
-            return
+        if scheduled:
+            text = f"Заявка #{source_request['request_id']} поставлена в план на {run_at.astimezone(TZ).strftime('%d.%m.%Y %H:%M')}"
+        else:
+            text = "Планирование недоступно: JobQueue не настроен. Установите зависимость python-telegram-bot[job-queue]."
         await update.message.reply_text(
-            f"Заявка #{source_request['request_id']} поставлена в план на {run_at.astimezone(TZ).strftime('%d.%m.%Y %H:%M')}",
+            text,
             reply_to_message_id=source_request["admin_group_message_id"],
         )
         return
@@ -1458,6 +1473,8 @@ async def handle_simple_moderation(query, context, row: sqlite3.Row, action: str
 # =========================================================
 async def private_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_private(update):
+        return
+    if context.user_data.get("active_flow"):
         return
     await update.message.reply_text("Выберите раздел ниже.", reply_markup=MAIN_MENU)
 
