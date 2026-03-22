@@ -247,7 +247,7 @@ def generate_request_id(conn: sqlite3.Connection) -> str:
         m = re.search(r"(\d+)$", row["request_id"])
         if m:
             last_num = int(m.group(1))
-    return f"GM-{last_num + 1:05d}"
+    return f"GM_{last_num + 1:05d}"
 
 
 def create_request(payload: Dict[str, Any]) -> str:
@@ -1213,6 +1213,24 @@ async def forward_user_reply_if_needed(update: Update, context: ContextTypes.DEF
     if not is_private(update):
         return
     if not update.message or update.message.text and update.message.text.startswith("/"):
+        return
+
+    # Не пересылаем служебные кнопки и сообщения, когда пользователь
+    # явно начинает новый сценарий внутри бота.
+    if context.user_data.get("active_flow"):
+        return
+    text = sanitize(update.message.text)
+    if text in {
+        BTN_EVENT,
+        BTN_AD,
+        BTN_PARTNERS,
+        BTN_FULL,
+        BTN_QUICK,
+        BTN_BACK,
+        BTN_CANCEL,
+        BTN_SEND,
+        BTN_EDIT,
+    }:
         return
 
     open_request = get_open_request_for_user(update.effective_user.id)
