@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -130,6 +131,15 @@ CATEGORY_CHOICES = {
     "Город",
     "Мастер-класс",
 }
+
+MAX_EVENT_TITLE = 120
+MAX_EVENT_PLACE = 120
+MAX_EVENT_DESC = 700
+MAX_EVENT_CONTACT = 200
+MAX_BIZ_PROJECT = 120
+MAX_BIZ_DESC = 700
+MAX_BIZ_NAME = 80
+MIN_QUICK_TEXT = 8
 
 # =========================================================
 # Состояния
@@ -339,6 +349,19 @@ def find_duplicate_event(title: str, when_text: str, place: str) -> Optional[str
 # =========================================================
 # Вспомогательные функции
 # =========================================================
+def normalize_ru_phone(value: str) -> Optional[str]:
+    digits = re.sub(r"\D", "", value or "")
+    if digits.startswith("8") and len(digits) == 11:
+        digits = "7" + digits[1:]
+    if len(digits) == 11 and digits.startswith("7"):
+        return "+" + digits
+    return None
+
+
+def request_hashtag(public_id: Optional[str]) -> str:
+    return f"#{public_id}" if public_id else ""
+
+
 def user_label(row_or_user) -> str:
     if hasattr(row_or_user, "username"):
         username = f"@{row_or_user.username}" if row_or_user.username else ""
@@ -347,6 +370,10 @@ def user_label(row_or_user) -> str:
         username = row_or_user["username"] or ""
         full_name = row_or_user["full_name"] or ""
     return username or full_name or "Без имени"
+
+
+def limit_text(value: str, max_len: int) -> str:
+    return (value or "").strip()[:max_len].strip()
 
 
 def event_preview_text(form: Dict[str, Any]) -> str:
@@ -395,10 +422,11 @@ def event_admin_text(row: sqlite3.Row) -> str:
         row["event_datetime"] or "",
         row["event_place"] or "",
     )
+    tag = request_hashtag(row["public_id"])
     duplicate_line = f"\nМетка: Дубль ({duplicate})" if duplicate and duplicate != row["public_id"] else ""
     if row["form_type"] == "quick":
         return (
-            f"Заявка #{row['public_id']}\n"
+            f"Заявка {tag}\n"
             f"Тип: Событие\n"
             f"Формат: Быстрая\n"
             f"Статус: {row['status']}{duplicate_line}\n\n"
@@ -407,7 +435,7 @@ def event_admin_text(row: sqlite3.Row) -> str:
             "Чтобы написать заявителю, ответьте reply на это сообщение."
         )
     return (
-        f"Заявка #{row['public_id']}\n"
+        f"Заявка {tag}\n"
         f"Тип: Событие\n"
         f"Формат: Полная\n"
         f"Статус: {row['status']}{duplicate_line}\n\n"
@@ -422,6 +450,55 @@ def event_admin_text(row: sqlite3.Row) -> str:
         f"Автор: {user_label(row)}\n\n"
         "Чтобы написать заявителю, ответьте reply на это сообщение."
     )
+
+
+def biz_admin_text(row: sqlite3.Row) -> str:
+    tag = request_hashtag(row["public_id"])
+    return (
+        f"Заявка {tag}\n"
+        f"Тип: Реклама / Партнёрство\n"
+        f"Статус: {row['status']}\n\n"
+        f"Название проекта: {row['biz_project'] or '—'}\n"
+        f"Описание: {row['biz_desc'] or '—'}\n"
+        f"Телефон: {row['biz_phone'] or '—'}\n"
+        f"Имя: {row['biz_name'] or '—'}\n"
+        f"Автор: {user_label(row)}\n\n"
+        "Чтобы написать заявителю, ответьте reply на это сообщение."
+    )
+
+
+async def refresh_admin_card(context: ContextTypes.DEFAULT_TYPE, req_id: int) -> None:
+    row = get_request_by_id(req_id)
+    if not row or not row["admin_group_message_id"]:
+        return
+
+    try:
+        if row["req_type"] == "event":
+            text = event_admin_text(row)
+            keyboard = event_admin_keyboard(req_id)
+            if row["photo_file_id"]:
+                await context.bot.edit_message_caption(
+                    chat_id=ADMIN_GROUP_ID,
+                    message_id=row["admin_group_message_id"],
+                    caption=text,
+                    reply_markup=keyboard,
+                )
+            else:
+                await context.bot.edit_message_text(
+                    chat_id=ADMIN_GROUP_ID,
+                    message_id=row["admin_group_message_id"],
+                    text=text,
+                    reply_markup=keyboard,
+                )
+        else:
+            await context.bot.edit_message_text(
+                chat_id=ADMIN_GROUP_ID,
+                message_id=row["admin_group_message_id"],
+                text=biz_admin_text(row),
+                reply_markup=biz_admin_keyboard(req_id),
+            )
+    except Exception as exc:
+        logger.warning("Не удалось обновить карточку %s: %s", req_id, exc)
 
 
 def biz_admin_text(row: sqlite3.Row) -> str:
@@ -539,7 +616,11 @@ async def event_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["event_form"]["title"] = update.effective_message.text.strip()
+    value = limit_text(update.effective_message.text, MAX_EVENT_TITLE)
+    if len(value) < 2:
+        await update.effective_message.reply_text("Название слишком короткое. Введите название события.")
+        return EVENT_TITLE
+    context.user_data["event_form"]["title"] = value
     await update.effective_message.reply_text("Укажите дату и время.", reply_markup=CANCEL_MENU)
     return EVENT_DATETIME
 
@@ -551,7 +632,11 @@ async def event_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def event_place(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["event_form"]["place"] = update.effective_message.text.strip()
+    value = limit_text(update.effective_message.text, MAX_EVENT_PLACE)
+    if len(value) < 2:
+        await update.effective_message.reply_text("Укажите место понятнее.")
+        return EVENT_PLACE
+    context.user_data["event_form"]["place"] = value
     await update.effective_message.reply_text("Укажите стоимость.", reply_markup=COST_MENU)
     return EVENT_COST
 
@@ -595,7 +680,11 @@ async def event_age_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def event_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["event_form"]["desc"] = update.effective_message.text.strip()
+    value = limit_text(update.effective_message.text, MAX_EVENT_DESC)
+    if len(value) < 10:
+        await update.effective_message.reply_text("Описание слишком короткое. Добавьте чуть больше деталей.")
+        return EVENT_DESC
+    context.user_data["event_form"]["desc"] = value
     await update.effective_message.reply_text("Выберите категорию.", reply_markup=CATEGORY_MENU)
     return EVENT_CATEGORY
 
@@ -617,7 +706,7 @@ async def event_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def event_category_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["event_form"]["category"] = update.effective_message.text.strip()
+    context.user_data["event_form"]["category"] = limit_text(update.effective_message.text, 60)
     await update.effective_message.reply_text(
         "Укажите ссылку на событие или контактный номер организатора, чтобы люди могли связаться с вами для уточнения информации. Если ничего нет — напишите 'нет'.",
         reply_markup=CANCEL_MENU,
@@ -626,7 +715,7 @@ async def event_category_custom(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def event_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["event_form"]["contact"] = update.effective_message.text.strip()
+    context.user_data["event_form"]["contact"] = limit_text(update.effective_message.text, MAX_EVENT_CONTACT)
     await update.effective_message.reply_text("Отправьте фото или афишу одним сообщением.", reply_markup=CANCEL_MENU)
     return EVENT_PHOTO
 
@@ -679,9 +768,12 @@ async def event_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def quick_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     message = update.effective_message
-    quick_text = (message.caption or message.text or "").strip()
+    quick_text = limit_text((message.caption or message.text or ""), MAX_EVENT_DESC)
     if not quick_text and not message.photo:
         await message.reply_text("Отправьте хотя бы текст или фото.")
+        return QUICK_EVENT
+    if len(quick_text) < MIN_QUICK_TEXT and not message.photo:
+        await message.reply_text("Добавьте чуть больше информации о событии.")
         return QUICK_EVENT
     req_id = create_request(
         req_type="event",
@@ -715,25 +807,45 @@ async def biz_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def biz_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["biz_form"]["project"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Кратко опишите заявку.", reply_markup=CANCEL_MENU)
+    value = limit_text(update.effective_message.text, MAX_BIZ_PROJECT)
+    if len(value) < 2:
+        await update.effective_message.reply_text("Название проекта слишком короткое. Укажите его ещё раз.")
+        return BIZ_PROJECT
+    context.user_data["biz_form"]["project"] = value
+    await update.effective_message.reply_text("Кратко опишите, что вы хотите разместить или предложить.", reply_markup=CANCEL_MENU)
     return BIZ_DESC
 
 
 async def biz_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["biz_form"]["desc"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Укажите контактный номер телефона.", reply_markup=CANCEL_MENU)
+    value = limit_text(update.effective_message.text, MAX_BIZ_DESC)
+    if len(value) < 10:
+        await update.effective_message.reply_text("Опишите заявку чуть подробнее.")
+        return BIZ_DESC
+    context.user_data["biz_form"]["desc"] = value
+    await update.effective_message.reply_text("Укажите контактный номер телефона в формате +7XXXXXXXXXX.", reply_markup=CANCEL_MENU)
     return BIZ_PHONE
 
 
 async def biz_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["biz_form"]["phone"] = update.effective_message.text.strip()
+    raw_phone = update.effective_message.text.strip()
+    normalized = normalize_ru_phone(raw_phone)
+    if not normalized:
+        await update.effective_message.reply_text(
+            "Номер указан неверно. Введите телефон в формате +7XXXXXXXXXX.",
+            reply_markup=CANCEL_MENU,
+        )
+        return BIZ_PHONE
+    context.user_data["biz_form"]["phone"] = normalized
     await update.effective_message.reply_text("Как вас зовут?", reply_markup=CANCEL_MENU)
     return BIZ_NAME
 
 
 async def biz_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["biz_form"]["name"] = update.effective_message.text.strip()
+    value = limit_text(update.effective_message.text, MAX_BIZ_NAME)
+    if len(value) < 2:
+        await update.effective_message.reply_text("Укажите имя корректно.")
+        return BIZ_NAME
+    context.user_data["biz_form"]["name"] = value
     await update.effective_message.reply_text(biz_preview_text(context.user_data["biz_form"]), reply_markup=PREVIEW_MENU)
     return BIZ_PREVIEW
 
@@ -790,10 +902,21 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             message_id=message.message_id,
         )
         set_active_dialog(row["user_id"], row["id"])
+
+        summary = (message.text or message.caption or "").strip()
+        note = "Менеджер → заявителю"
+        if summary:
+            note += f"\n{summary[:800]}"
+        note += f"\n{request_hashtag(row['public_id'])}"
+        await context.bot.send_message(
+            ADMIN_GROUP_ID,
+            note,
+            reply_to_message_id=row["admin_group_message_id"],
+        )
     except Forbidden:
         await context.bot.send_message(
             ADMIN_GROUP_ID,
-            f"Не удалось доставить сообщение по заявке #{row['public_id']}: пользователь заблокировал бота.",
+            f"Не удалось доставить сообщение по заявке {request_hashtag(row['public_id'])}: пользователь заблокировал бота.",
             reply_to_message_id=row["admin_group_message_id"],
         )
 
@@ -819,6 +942,11 @@ async def handle_user_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             message_id=message.message_id,
             reply_to_message_id=row["admin_group_message_id"],
         )
+        await context.bot.send_message(
+            ADMIN_GROUP_ID,
+            f"Заявитель → менеджеру\n{request_hashtag(row['public_id'])}",
+            reply_to_message_id=row["admin_group_message_id"],
+        )
     except Exception as exc:
         logger.exception("Не удалось переслать ответ пользователя: %s", exc)
         await message.reply_text("Не удалось отправить сообщение менеджеру. Попробуйте позже.")
@@ -842,6 +970,8 @@ async def moderate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.message.reply_text("Заявка не найдена.")
         return
 
+    tag = request_hashtag(row["public_id"])
+
     if action == "event_publish":
         if row["req_type"] != "event":
             return
@@ -850,47 +980,69 @@ async def moderate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             sent = await context.bot.send_photo(CHANNEL_ID, row["photo_file_id"], caption=text)
         else:
             sent = await context.bot.send_message(CHANNEL_ID, text)
-        update_request(req_id, status="Опубликована", dialog_open=0, channel_message_id=sent.message_id)
-        clear_active_dialog(row["user_id"])
+        update_request(req_id, status="Опубликована", dialog_open=1, channel_message_id=sent.message_id)
+        set_active_dialog(row["user_id"], req_id)
+        await refresh_admin_card(context, req_id)
         await query.message.reply_text(
-            f"Заявка #{row['public_id']} опубликована.",
+            f"Опубликовано. {tag}",
             reply_to_message_id=row["admin_group_message_id"],
         )
+        try:
+            await context.bot.send_message(
+                row["user_id"],
+                "Ваша заявка опубликована в канале. Спасибо!",
+            )
+        except Forbidden:
+            pass
         return
 
     if action == "event_fix":
-        update_request(req_id, status="На правки")
+        update_request(req_id, status="На правки", dialog_open=1)
+        set_active_dialog(row["user_id"], req_id)
+        await refresh_admin_card(context, req_id)
         await query.message.reply_text(
-            "Статус изменён на 'На правки'. Ответьте reply на карточку, чтобы написать заявителю.",
+            f"Статус изменён на «На правки». Ответьте reply на карточку, чтобы написать заявителю.\n{tag}",
             reply_to_message_id=row["admin_group_message_id"],
         )
         return
 
     if action == "biz_fix":
-        update_request(req_id, status="На правки")
+        update_request(req_id, status="На правки", dialog_open=1)
+        set_active_dialog(row["user_id"], req_id)
+        await refresh_admin_card(context, req_id)
         await query.message.reply_text(
-            "Статус изменён на 'На правки'. Ответьте reply на карточку, чтобы написать заявителю.",
+            f"Статус изменён на «На правки». Ответьте reply на карточку, чтобы написать заявителю.\n{tag}",
             reply_to_message_id=row["admin_group_message_id"],
         )
         return
 
     if action == "biz_accept":
-        update_request(req_id, status="В работе")
+        update_request(req_id, status="В работе", dialog_open=1)
+        set_active_dialog(row["user_id"], req_id)
+        await refresh_admin_card(context, req_id)
         await query.message.reply_text(
-            f"Заявка #{row['public_id']} принята в работу.",
+            f"Заявка принята в работу. {tag}",
             reply_to_message_id=row["admin_group_message_id"],
         )
+        try:
+            await context.bot.send_message(
+                row["user_id"],
+                "Ваша заявка принята в работу. Если потребуется, менеджер свяжется с вами здесь.",
+            )
+        except Forbidden:
+            pass
         return
 
     if action in {"event_reject", "biz_reject"}:
         update_request(req_id, status="Отклонена", dialog_open=0)
         clear_active_dialog(row["user_id"])
+        await refresh_admin_card(context, req_id)
         try:
             await context.bot.send_message(row["user_id"], "Ваша заявка закрыта менеджером.")
         except Forbidden:
             pass
         await query.message.reply_text(
-            f"Заявка #{row['public_id']} отклонена.",
+            f"Заявка отклонена. {tag}",
             reply_to_message_id=row["admin_group_message_id"],
         )
         return
@@ -898,8 +1050,9 @@ async def moderate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if action in {"event_archive", "biz_archive"}:
         update_request(req_id, status="Архив", dialog_open=0)
         clear_active_dialog(row["user_id"])
+        await refresh_admin_card(context, req_id)
         await query.message.reply_text(
-            f"Заявка #{row['public_id']} перенесена в архив.",
+            f"Заявка перенесена в архив. {tag}",
             reply_to_message_id=row["admin_group_message_id"],
         )
         return
