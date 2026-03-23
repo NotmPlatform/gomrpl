@@ -83,6 +83,11 @@ EVENT_MODE_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+CANCEL_MENU = ReplyKeyboardMarkup(
+    [[KeyboardButton(BTN_CANCEL)]],
+    resize_keyboard=True,
+)
+
 COST_MENU = ReplyKeyboardMarkup(
     [[KeyboardButton("Бесплатно"), KeyboardButton("Платно")], [KeyboardButton("Донат"), KeyboardButton("Другое")], [KeyboardButton(BTN_CANCEL)]],
     resize_keyboard=True,
@@ -521,12 +526,12 @@ async def event_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text
     if text == BTN_FULL:
         context.user_data["event_form"] = {}
-        await update.effective_message.reply_text("Введите название события.")
+        await update.effective_message.reply_text("Введите название события.", reply_markup=CANCEL_MENU)
         return EVENT_TITLE
     if text == BTN_QUICK:
         await update.effective_message.reply_text(
             "Отправьте одним сообщением всё, что есть о событии: название, дату, место, стоимость, описание, контакт и фото. Если понадобится, мы уточним детали позже.",
-            reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True),
+            reply_markup=CANCEL_MENU,
         )
         return QUICK_EVENT
     await update.effective_message.reply_text("Возвращаю в главное меню.", reply_markup=MAIN_MENU)
@@ -535,13 +540,13 @@ async def event_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def event_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["event_form"]["title"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Укажите дату и время.")
+    await update.effective_message.reply_text("Укажите дату и время.", reply_markup=CANCEL_MENU)
     return EVENT_DATETIME
 
 
 async def event_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["event_form"]["datetime"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Укажите место.")
+    await update.effective_message.reply_text("Укажите место.", reply_markup=CANCEL_MENU)
     return EVENT_PLACE
 
 
@@ -554,7 +559,7 @@ async def event_place(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def event_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text.strip()
     if text == "Другое":
-        await update.effective_message.reply_text("Введите стоимость вручную.")
+        await update.effective_message.reply_text("Введите стоимость вручную.", reply_markup=CANCEL_MENU)
         return EVENT_COST_CUSTOM
     if text not in COST_CHOICES:
         await update.effective_message.reply_text("Выберите кнопку или введите через 'Другое'.", reply_markup=COST_MENU)
@@ -573,19 +578,19 @@ async def event_cost_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def event_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text.strip()
     if text == "Другое":
-        await update.effective_message.reply_text("Введите возраст вручную.")
+        await update.effective_message.reply_text("Введите возраст вручную.", reply_markup=CANCEL_MENU)
         return EVENT_AGE_CUSTOM
     if text not in AGE_CHOICES:
         await update.effective_message.reply_text("Выберите кнопку или введите через 'Другое'.", reply_markup=AGE_MENU)
         return EVENT_AGE
     context.user_data["event_form"]["age"] = text
-    await update.effective_message.reply_text("Коротко опишите событие.")
+    await update.effective_message.reply_text("Коротко опишите событие.", reply_markup=CANCEL_MENU)
     return EVENT_DESC
 
 
 async def event_age_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["event_form"]["age"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Коротко опишите событие.")
+    await update.effective_message.reply_text("Коротко опишите событие.", reply_markup=CANCEL_MENU)
     return EVENT_DESC
 
 
@@ -598,14 +603,15 @@ async def event_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def event_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.effective_message.text.strip()
     if text == "Другое":
-        await update.effective_message.reply_text("Введите категорию вручную.")
+        await update.effective_message.reply_text("Введите категорию вручную.", reply_markup=CANCEL_MENU)
         return EVENT_CATEGORY_CUSTOM
     if text not in CATEGORY_CHOICES:
         await update.effective_message.reply_text("Выберите категорию кнопкой или через 'Другое'.", reply_markup=CATEGORY_MENU)
         return EVENT_CATEGORY
     context.user_data["event_form"]["category"] = text
     await update.effective_message.reply_text(
-        "Укажите контакт или ссылку для связи. Можно указать что-то одно. Если ничего нет — напишите 'нет'."
+        "Укажите ссылку на событие или контактный номер организатора, чтобы люди могли связаться с вами для уточнения информации. Если ничего нет — напишите 'нет'.",
+        reply_markup=CANCEL_MENU,
     )
     return EVENT_CONTACT
 
@@ -613,14 +619,15 @@ async def event_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def event_category_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["event_form"]["category"] = update.effective_message.text.strip()
     await update.effective_message.reply_text(
-        "Укажите контакт или ссылку для связи. Можно указать что-то одно. Если ничего нет — напишите 'нет'."
+        "Укажите ссылку на событие или контактный номер организатора, чтобы люди могли связаться с вами для уточнения информации. Если ничего нет — напишите 'нет'.",
+        reply_markup=CANCEL_MENU,
     )
     return EVENT_CONTACT
 
 
 async def event_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["event_form"]["contact"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Отправьте фото или афишу одним сообщением.")
+    await update.effective_message.reply_text("Отправьте фото или афишу одним сообщением.", reply_markup=CANCEL_MENU)
     return EVENT_PHOTO
 
 
@@ -702,26 +709,26 @@ async def biz_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
         "Оставьте заявку на рекламу или партнёрство. Я задам 4 коротких вопроса.\n\n"
         "Первый вопрос: как называется ваш проект?",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_CANCEL)]], resize_keyboard=True),
+        reply_markup=CANCEL_MENU,
     )
     return BIZ_PROJECT
 
 
 async def biz_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["biz_form"]["project"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Кратко опишите заявку.")
+    await update.effective_message.reply_text("Кратко опишите заявку.", reply_markup=CANCEL_MENU)
     return BIZ_DESC
 
 
 async def biz_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["biz_form"]["desc"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Укажите контактный номер телефона.")
+    await update.effective_message.reply_text("Укажите контактный номер телефона.", reply_markup=CANCEL_MENU)
     return BIZ_PHONE
 
 
 async def biz_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["biz_form"]["phone"] = update.effective_message.text.strip()
-    await update.effective_message.reply_text("Как вас зовут?")
+    await update.effective_message.reply_text("Как вас зовут?", reply_markup=CANCEL_MENU)
     return BIZ_NAME
 
 
@@ -755,7 +762,7 @@ async def biz_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     if text == BTN_EDIT:
         context.user_data["biz_form"] = {}
-        await update.effective_message.reply_text("Давайте заполним заново. Как называется ваш проект?")
+        await update.effective_message.reply_text("Давайте заполним заново. Как называется ваш проект?", reply_markup=CANCEL_MENU)
         return BIZ_PROJECT
     context.user_data.clear()
     await update.effective_message.reply_text("Заявка отменена.", reply_markup=MAIN_MENU)
